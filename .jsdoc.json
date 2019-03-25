@@ -6,34 +6,12 @@
     "source": {
         "include": ["README.md", "src", "package.json"],
         "includePattern": ".js$",
-        "excludePattern": "(node_modules/|index.(?:js|d.ts)$)"
-    },
-    "templates": {
-        "cleverLinks": false,
-        "monospaceLinks": true,
-        "useLongnameInNav": false,
-        "default": {
-            "includeDate": false
-        }
+        "excludePattern": "node_modules/"
     },
     "opts": {
-        "destination": "../discord-akairo-docs/out",
         "encoding": "utf8",
         "private": true,
         "recurse": true,
-        "sort": true,
-        "template": "./node_modules/docdash"
-    },
-    "plugins": ["plugins/markdown", "node_modules/jsdoc-strip-async-await"],
-    "markdown": {
-        "hardwrap": true
-    },
-    "docdash": {
-        "sectionOrder": ["Classes"],
-        "static": false,
-        "sort": true,
-        "search": true,
-        "collapse": true,
-        "typedefs": true
+        "sort": true
     }
 }

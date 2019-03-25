@@ -3,28 +3,49 @@ const Argument = require('./Argument');
 const { ArgumentMatches } = require('../../../util/Constants');
 const Flag = require('../Flag');
 
+/**
+ * Runs arguments.
+ * @param {Command} command - Command to run for.
+ * @private
+ */
 class ArgumentRunner {
     constructor(command) {
         this.command = command;
     }
 
+    /**
+     * The Akairo client.
+     * @type {AkairoClient}
+     */
     get client() {
         return this.command.client;
     }
 
+    /**
+     * The command handler.
+     * @type {CommandHandler}
+     */
     get handler() {
         return this.command.handler;
     }
 
+    /**
+     * Runs the arguments.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {GeneratorFunction} generator - Argument generator.
+     * @returns {Promise<Flag|any>}
+     */
     async run(message, parsed, generator) {
         const state = {
             usedIndices: new Set(),
-            phraseIndex: 0
+            phraseIndex: 0,
+            index: 0
         };
 
         const augmentRest = val => {
-            if (Flag.is(val, 'continue') && val.rest == null) {
-                val.rest = parsed.phrases.slice(state.phraseIndex).join(' ');
+            if (Flag.is(val, 'continue')) {
+                val.rest = parsed.all.slice(state.index).map(x => x.raw).join('');
             }
         };
 
@@ -50,15 +71,24 @@ class ArgumentRunner {
         return curr.value;
     }
 
+    /**
+     * Runs one argument.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {Argument} arg - Current argument.
+     * @returns {Promise<Flag|any>}
+     */
     runOne(message, parsed, state, arg) {
         const cases = {
             [ArgumentMatches.PHRASE]: this.runPhrase,
-            [ArgumentMatches.REST]: this.runRest,
-            [ArgumentMatches.SEPARATE]: this.runSeparate,
             [ArgumentMatches.FLAG]: this.runFlag,
             [ArgumentMatches.OPTION]: this.runOption,
+            [ArgumentMatches.REST]: this.runRest,
+            [ArgumentMatches.SEPARATE]: this.runSeparate,
             [ArgumentMatches.TEXT]: this.runText,
             [ArgumentMatches.CONTENT]: this.runContent,
+            [ArgumentMatches.REST_CONTENT]: this.runRestContent,
             [ArgumentMatches.NONE]: this.runNone
         };
 
@@ -70,6 +100,14 @@ class ArgumentRunner {
         return runFn.call(this, message, parsed, state, arg);
     }
 
+    /**
+     * Runs `phrase` match.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {Argument} arg - Current argument.
+     * @returns {Promise<Flag|any>}
+     */
     async runPhrase(message, parsed, state, arg) {
         if (arg.unordered || arg.unordered === 0) {
             const indices = typeof unordered === 'number'
@@ -83,7 +121,7 @@ class ArgumentRunner {
                     continue;
                 }
 
-                const phrase = parsed.phrases[i] || '';
+                const phrase = parsed.phrases[i] ? parsed.phrases[i].value : '';
                 // `cast` is used instead of `process` since we do not want prompts.
                 const res = await arg.cast(message, phrase);
                 if (res != null) {
@@ -97,32 +135,48 @@ class ArgumentRunner {
         }
 
         const index = arg.index == null ? state.phraseIndex : arg.index;
-        const ret = arg.process(message, parsed.phrases[index] || '');
+        const ret = arg.process(message, parsed.phrases[index] ? parsed.phrases[index].value : '');
         if (arg.index == null) {
-            state.phraseIndex++;
+            ArgumentRunner.increaseIndex(parsed, state);
         }
 
         return ret;
     }
 
+    /**
+     * Runs `rest` match.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {Argument} arg - Current argument.
+     * @returns {Promise<Flag|any>}
+     */
     async runRest(message, parsed, state, arg) {
         const index = arg.index == null ? state.phraseIndex : arg.index;
-        const rest = parsed.phrases.slice(index, index + arg.limit).join(' ');
+        const rest = parsed.phrases.slice(index, index + arg.limit).map(x => x.raw).join('').trim();
         const ret = await arg.process(message, rest);
         if (arg.index == null) {
-            state.phraseIndex++;
+            ArgumentRunner.increaseIndex(parsed, state);
         }
 
         return ret;
     }
 
+    /**
+     * Runs `separate` match.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {Argument} arg - Current argument.
+     * @returns {Promise<Flag|any>}
+     */
     async runSeparate(message, parsed, state, arg) {
         const index = arg.index == null ? state.phraseIndex : arg.index;
         const phrases = parsed.phrases.slice(index, index + arg.limit);
         if (!phrases.length) {
             const ret = await arg.process(message, '');
             if (arg.index != null) {
-                state.phraseIndex++;
+                ArgumentRunner.increaseIndex(parsed, state);
             }
 
             return ret;
@@ -130,22 +184,30 @@ class ArgumentRunner {
 
         const res = [];
         for (const phrase of phrases) {
-            res.push(await arg.process(message, phrase));
+            res.push(await arg.process(message, phrase.value));
         }
 
         if (arg.index != null) {
-            state.phraseIndex++;
+            ArgumentRunner.increaseIndex(parsed, state);
         }
 
         return res;
     }
 
+    /**
+     * Runs `flag` match.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {Argument} arg - Current argument.
+     * @returns {Promise<Flag|any>}
+     */
     runFlag(message, parsed, state, arg) {
         const names = Array.isArray(arg.flag) ? arg.flag : [arg.flag];
         if (arg.multipleFlags) {
             const amount = parsed.flags.filter(flag =>
                 names.some(name =>
-                    name.toLowerCase() === flag.toLowerCase()
+                    name.toLowerCase() === flag.key.toLowerCase()
                 )
             ).length;
 
@@ -154,21 +216,29 @@ class ArgumentRunner {
 
         const flagFound = parsed.flags.some(flag =>
             names.some(name =>
-                name.toLowerCase() === flag.toLowerCase()
+                name.toLowerCase() === flag.key.toLowerCase()
             )
         );
 
         return arg.default == null ? flagFound : !flagFound;
     }
 
+    /**
+     * Runs `option` match.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {Argument} arg - Current argument.
+     * @returns {Promise<Flag|any>}
+     */
     async runOption(message, parsed, state, arg) {
         const names = Array.isArray(arg.flag) ? arg.flag : [arg.flag];
         if (arg.multipleFlags) {
-            const values = parsed.optionFlags.filter(([flag]) =>
+            const values = parsed.optionFlags.filter(flag =>
                 names.some(name =>
-                    name.toLowerCase() === flag.toLowerCase()
+                    name.toLowerCase() === flag.key.toLowerCase()
                 )
-            ).map(([, value]) => value).slice(0, arg.limit);
+            ).map(x => x.value).slice(0, arg.limit);
 
             const res = [];
             for (const value of values) {
@@ -178,35 +248,105 @@ class ArgumentRunner {
             return res;
         }
 
-        const pair = parsed.optionFlags.find(([flag]) =>
+        const foundFlag = parsed.optionFlags.find(flag =>
             names.some(name =>
-                name.toLowerCase() === flag.toLowerCase()
+                name.toLowerCase() === flag.key.toLowerCase()
             )
         );
 
-        return arg.process(message, pair != null ? pair[1] : '');
+        return arg.process(message, foundFlag != null ? foundFlag.value : '');
     }
 
+    /**
+     * Runs `text` match.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {Argument} arg - Current argument.
+     * @returns {Promise<Flag|any>}
+     */
     runText(message, parsed, state, arg) {
         const index = arg.index == null ? 0 : arg.index;
-        const text = parsed.raws.slice(index, index + arg.limit).join('').trim();
+        const text = parsed.phrases.slice(index, index + arg.limit).map(x => x.raw).join('').trim();
         return arg.process(message, text);
     }
 
+    /**
+     * Runs `content` match.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {Argument} arg - Current argument.
+     * @returns {Promise<Flag|any>}
+     */
     runContent(message, parsed, state, arg) {
         const index = arg.index == null ? 0 : arg.index;
-        const content = parsed.phrases.slice(index, index + arg.limit).join(' ').trim();
+        const content = parsed.all.slice(index, index + arg.limit).map(x => x.raw).join('').trim();
         return arg.process(message, content);
     }
 
+    /**
+     * Runs `restContent` match.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {Argument} arg - Current argument.
+     * @returns {Promise<Flag|any>}
+     */
+    async runRestContent(message, parsed, state, arg) {
+        const index = arg.index == null ? state.index : arg.index;
+        const rest = parsed.all.slice(index, index + arg.limit).map(x => x.raw).join('').trim();
+        const ret = await arg.process(message, rest);
+        if (arg.index == null) {
+            ArgumentRunner.increaseIndex(parsed, state);
+        }
+
+        return ret;
+    }
+
+    /**
+     * Runs `none` match.
+     * @param {Message} message - Message that triggered the command.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {Argument} arg - Current argument.
+     * @returns {Promise<Flag|any>}
+     */
     runNone(message, parsed, state, arg) {
         return arg.process(message, '');
     }
 
+    /**
+     * Modifies state by incrementing the indices.
+     * @param {Object} parsed - Parsed data from ContentParser.
+     * @param {Object} state - Argument handling state.
+     * @param {number} n - Number of indices to increase by.
+     * @returns {Promise<Flag|any>}
+     */
+    static increaseIndex(parsed, state, n = 1) {
+        state.phraseIndex += n;
+        while (n > 0) {
+            do {
+                state.index++;
+            } while (parsed.all[state.index] && parsed.all[state.index].type !== 'Phrase');
+            n--;
+        }
+    }
+
+    /**
+     * Checks if something is a flag that short circuits.
+     * @param {any} value - A value.
+     * @returns {boolean}
+     */
     static isShortCircuit(value) {
         return Flag.is(value, 'cancel') || Flag.is(value, 'retry') || Flag.is(value, 'continue');
     }
 
+    /**
+     * Creates an argument generator from argument options.
+     * @param {ArgumentOptions[]} args - Argument options.
+     * @returns {GeneratorFunction}
+     */
     static fromArguments(args) {
         return function* generate() {
             const res = {};

@@ -4,13 +4,13 @@ const Argument = require('./arguments/Argument');
 const ArgumentRunner = require('./arguments/ArgumentRunner');
 const ContentParser = require('./ContentParser');
 
-/** @extends AkairoModule */
+/**
+ * Represents a command.
+ * @param {string} id - Command ID.
+ * @param {CommandOptions} [options={}] - Options for the command.
+ * @extends {AkairoModule}
+ */
 class Command extends AkairoModule {
-    /**
-     * Creates a new command.
-     * @param {string} id - Command ID.
-     * @param {CommandOptions} [options={}] - Options for the command.
-     */
     constructor(id, options = {}) {
         super(id, { category: options.category });
 
@@ -60,7 +60,7 @@ class Command extends AkairoModule {
         this.argumentRunner = new ArgumentRunner(this);
         this.argumentGenerator = Array.isArray(args)
             ? ArgumentRunner.fromArguments(args.map(arg => [arg.id, new Argument(this, arg)]))
-            : args;
+            : args.bind(this);
 
         /**
          * Usable only in this channel type.
@@ -209,7 +209,7 @@ class Command extends AkairoModule {
     }
 
     /**
-     * Parses content using the command's argument options.
+     * Parses content using the command's arguments.
      * @param {Message} message - Message to use.
      * @param {string} content - String to parse.
      * @returns {Promise<Object|ParsingFlag>}
